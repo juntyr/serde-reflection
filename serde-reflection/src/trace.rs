@@ -57,6 +57,10 @@ pub struct TracerConfig {
     pub(crate) record_samples_for_newtype_structs: bool,
     pub(crate) record_samples_for_tuple_structs: bool,
     pub(crate) record_samples_for_structs: bool,
+    pub(crate) cut_option_exploration: bool,
+    pub(crate) cut_seq_exploration: bool,
+    pub(crate) cut_map_exploration: bool,
+    pub(crate) cut_enum_exploration: bool,
 }
 
 impl Default for TracerConfig {
@@ -67,6 +71,10 @@ impl Default for TracerConfig {
             record_samples_for_newtype_structs: true,
             record_samples_for_tuple_structs: false,
             record_samples_for_structs: false,
+            cut_option_exploration: true,
+            cut_seq_exploration: true,
+            cut_map_exploration: true,
+            cut_enum_exploration: true,
         }
     }
 }
@@ -94,6 +102,38 @@ impl TracerConfig {
     /// Record samples of (regular) structs during serialization and inject them during deserialization.
     pub fn record_samples_for_structs(mut self, value: bool) -> Self {
         self.record_samples_for_structs = value;
+        self
+    }
+
+    /// Whether an optional value is *not* explored again after encountering it once.
+    ///
+    /// Warning: Disabling this option may lead to the tracing not terminating.
+    pub fn cut_option_exploration(mut self, value: bool) -> Self {
+        self.cut_option_exploration = value;
+        self
+    }
+
+    /// Whether a sequence is left empty after encountering it once.
+    ///
+    /// Warning: Disabling this option may lead to the tracing not terminating.
+    pub fn cut_seq_exploration(mut self, value: bool) -> Self {
+        self.cut_seq_exploration = value;
+        self
+    }
+
+    /// Whether a map is left empty after encountering it once.
+    ///
+    /// Warning: Disabling this option may lead to the tracing not terminating.
+    pub fn cut_map_exploration(mut self, value: bool) -> Self {
+        self.cut_map_exploration = value;
+        self
+    }
+
+    /// Whether an enum falls back to the first variant after encountering it once.
+    ///
+    /// Warning: Disabling this option may lead to the tracing not terminating.
+    pub fn cut_enum_exploration(mut self, value: bool) -> Self {
+        self.cut_enum_exploration = value;
         self
     }
 }
@@ -169,14 +209,37 @@ impl Tracer {
         loop {
             let (format, value) = self.trace_type_once::<T>(samples)?;
             values.push(value);
-            if let Format::TypeName(name) = &format {
-                if self.incomplete_enums.contains(name) {
-                    // Restart the analysis to find more variants of T.
-                    self.incomplete_enums.remove(name);
-                    continue;
-                }
+            // if let Format::TypeName(_name) = &format {
+            if !self.incomplete_enums.is_empty() {
+                continue;
             }
+            // if self.incomplete_enums.contains(name) {
+            //     // Restart the analysis to find more variants of T.
+            //     self.incomplete_enums.remove(name);
+            //     continue;
+            // }
+            // }
             return Ok((format, values));
+        }
+    }
+
+    /// Same as `trace_type_once` but if any uncovered variants remain in the
+    /// recursive format, we repeat the process.
+    /// We accumulate and return all the sampled values at the end.
+    pub fn trace_type_all_variants<'de, T>(
+        &mut self,
+        samples: &'de Samples,
+    ) -> Result<(Format, Vec<T>)>
+    where
+        T: Deserialize<'de>,
+    {
+        let mut values = Vec::new();
+        loop {
+            let (format, value) = self.trace_type_once::<T>(samples)?;
+            values.push(value);
+            if self.incomplete_enums.is_empty() {
+                return Ok((format, values));
+            }
         }
     }
 
